@@ -2,7 +2,7 @@
 
 # This code is part of Qiskit.
 #
-# (C) Copyright IBM 2017, 2019.
+# (C) Copyright IBM 2017, 2020.
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -18,14 +18,14 @@ This module is used for creating a job objects for the IBM Q Experience.
 """
 
 import logging
-from typing import Dict, Optional, Tuple, Any
+from typing import Dict, Optional, Tuple, Any, List
 import warnings
 from datetime import datetime
 
 from marshmallow import ValidationError
 
 from qiskit.providers import (BaseJob,  # type: ignore[attr-defined]
-                              JobTimeoutError, BaseBackend)
+                              BaseBackend)
 from qiskit.providers.jobstatus import JOB_FINAL_STATES, JobStatus
 from qiskit.providers.models import BackendProperties
 from qiskit.qobj import Qobj
@@ -35,8 +35,8 @@ from qiskit.validation import BaseModel, ModelValidationError, bind_schema
 from ..apiconstants import ApiJobStatus, ApiJobKind
 from ..api.clients import AccountClient
 from ..api.exceptions import ApiError, UserTimeoutExceededError
-from ..job.exceptions import (IBMQJobApiError, IBMQJobFailureError,
-                              IBMQJobInvalidStateError)
+from .exceptions import (IBMQJobApiError, IBMQJobFailureError,
+                         IBMQJobTimeoutError, IBMQJobInvalidStateError)
 from .queueinfo import QueueInfo
 from .schema import JobResponseSchema
 from .utils import build_error_report, api_status_to_job_status, api_to_job_error
@@ -261,7 +261,7 @@ class IBMQJob(BaseModel, BaseJob):
         """
         try:
             response = self._api.job_cancel(self.job_id())
-            self._cancelled = 'error' not in response
+            self._cancelled = 'error' not in response and response.get('cancelled', False)
             return self._cancelled
         except ApiError as error:
             self._cancelled = False
@@ -290,6 +290,41 @@ class IBMQJob(BaseModel, BaseJob):
 
         return self._status
 
+    def done(self) -> bool:
+        """Return whether the job has successfully run.
+
+        Returns:
+            True if job status is done, else false.
+        """
+        return self._is_job_status(JobStatus.DONE)
+
+    def running(self) -> bool:
+        """Return whether the job is actively running.
+
+        Returns:
+            True if job status is running, else false.
+        """
+        return self._is_job_status(JobStatus.RUNNING)
+
+    def cancelled(self) -> bool:
+        """Return whether the job has been cancelled.
+
+        Returns:
+            True if job status is cancelled, else false.
+        """
+        return self._is_job_status(JobStatus.CANCELLED)
+
+    def _is_job_status(self, job_status: JobStatus) -> bool:
+        """Return whether the current job status matches the desired one.
+
+        Args:
+            job_status: the job status to check against.
+
+        Returns:
+            True if the current job status matches the desired one, else false.
+        """
+        return self.status() == job_status
+
     def _update_status_position(
             self,
             status: ApiJobStatus,
@@ -307,6 +342,8 @@ class IBMQJob(BaseModel, BaseJob):
         self._status = api_status_to_job_status(status)
         if status is ApiJobStatus.RUNNING and api_info_queue:
             try:
+                api_info_queue['job_id'] = self.job_id()  # job_id is used for QueueInfo.format().
+
                 info_queue = QueueInfo.from_dict(api_info_queue)
                 if info_queue._status == ApiJobStatus.PENDING_IN_QUEUE.value:
                     self._status = JobStatus.QUEUED
@@ -429,6 +466,14 @@ class IBMQJob(BaseModel, BaseJob):
         """
         return self._name
 
+    def tags(self) -> List[str]:
+        """Return the tags assigned to this job.
+
+        Returns:
+            Tags assigned to this job.
+        """
+        return self._tags.copy()
+
     def time_per_step(self) -> Optional[Dict]:
         """Return the date and time information on each step of the job processing.
 
@@ -507,7 +552,7 @@ class IBMQJob(BaseModel, BaseJob):
             True if the final job status matches one of the required states.
 
         Raises:
-            JobTimeoutError: if the job does not return results before a
+            IBMQJobTimeoutError: if the job does not return results before a
                 specified timeout.
         """
         if self._status in JOB_FINAL_STATES:
@@ -518,7 +563,7 @@ class IBMQJob(BaseModel, BaseJob):
                 status_response = self._api.job_final_status(
                     self.job_id(), timeout=timeout, wait=wait)
             except UserTimeoutExceededError:
-                raise JobTimeoutError(
+                raise IBMQJobTimeoutError(
                     'Timeout while waiting for job {}'.format(self._job_id))
         self._update_status_position(ApiJobStatus(status_response['status']),
                                      status_response.get('infoQueue', None))

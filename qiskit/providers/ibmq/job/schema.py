@@ -2,7 +2,7 @@
 
 # This code is part of Qiskit.
 #
-# (C) Copyright IBM 2019.
+# (C) Copyright IBM 2019, 2020.
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -15,10 +15,9 @@
 """Schemas for job."""
 
 from marshmallow import pre_load
-from marshmallow.validate import Range
 
 from qiskit.validation import BaseSchema
-from qiskit.validation.fields import Dict, String, Nested, Integer, Boolean, DateTime
+from qiskit.validation.fields import Dict, String, Nested, Integer, Boolean, DateTime, List
 from qiskit.qobj.qobj import QobjSchema
 from qiskit.result.models import ResultSchema
 
@@ -37,7 +36,9 @@ FIELDS_MAP = {
     'qObjectResult': '_result',
     'error': '_error',
     'name': '_name',
-    'timePerStep': '_time_per_step'
+    'timePerStep': '_time_per_step',
+    'shots': '_api_shots',
+    'tags': '_tags'
 }
 
 
@@ -87,11 +88,11 @@ class JobResponseSchema(BaseSchema):
     # Optional properties with a default value.
     kind = Enum(enum_cls=ApiJobKind, missing=None)
     _name = String(missing=None)
-    shots = Integer(validate=Range(min=0), missing=None)
     _time_per_step = Dict(keys=String, values=String, missing=None)
     _result = Nested(ResultSchema, missing=None)
     _qobj = Nested(QobjSchema, missing=None)
     _error = Nested(JobResponseErrorSchema, missing=None)
+    _tags = List(String, missing=[])
 
     # Optional properties
     _backend_info = Nested(JobResponseBackendSchema)
